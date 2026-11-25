@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="第十一届华为 ICT 大赛｜昇腾 AI 算子开发赛道（决赛）实时榜单看板：总榜 10 题轮廓与矩阵、单题 5 公开用例耗时 vs tbest、榜首加权分析与公开 MCP 接口。" />
+    <title>ICT 算子赛实时看板 · 昇腾 AI 算子开发赛道（决赛）</title>
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('ict-ops:theme') || 'system';
+          var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.cache/
+.wrangler/
+.stats-key
+.DS_Store
+*.log
+worker-configuration.d.ts

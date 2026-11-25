@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "types": []
+  },
+  "include": [
+    "worker-configuration.d.ts",
+    "src/worker",
+    "src/shared",
+    "src/server/upstream.ts",
+    "src/server/app.ts",
+    "src/server/csv.ts",
+    "src/server/visits.ts",
+    "src/server/mcp.ts",
+    "src/server/mcp-tools.ts"
+  ]
+}
