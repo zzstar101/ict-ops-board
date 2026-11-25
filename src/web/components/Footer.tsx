@@ -23,6 +23,14 @@ export function Footer() {
           <Link to="/mcp" className="hover:text-[var(--ink)]">
             MCP 接入文档
           </Link>
+          <a
+            href="https://github.com/zzstar101/ict-ops-board"
+            target="_blank"
+            rel="noreferrer"
+            className="hover:text-[var(--ink)]"
+          >
+            GitHub ↗
+          </a>
           <span>MIT License</span>
         </div>
       </div>

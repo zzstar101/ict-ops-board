@@ -3,6 +3,23 @@
   "version": "1.0.0",
   "private": true,
   "license": "MIT",
+  "author": "zzstar101",
+  "homepage": "https://zzstar101.github.io/ict-ops-board/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zzstar101/ict-ops-board.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zzstar101/ict-ops-board/issues"
+  },
+  "keywords": [
+    "huawei-ict",
+    "ascend-c",
+    "cann",
+    "leaderboard",
+    "cloudflare-workers",
+    "mcp"
+  ],
   "description": "Real-time leaderboard dashboard for 第十一届华为ICT大赛｜昇腾AI算子开发赛道（决赛）",
   "type": "module",
   "scripts": {
