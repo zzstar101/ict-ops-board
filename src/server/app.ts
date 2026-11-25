@@ -19,7 +19,7 @@ export interface ApiOptions<E extends Env> {
   snapshot?: (c: Context<E>, force: boolean) => Promise<{ snap: Snapshot; via: string }>;
   stats?: (c: Context<E>) => { backend: StatsBackend; key: string; ctx: HitContext } | null;
   online?: (c: Context<E>) => Promise<OnlineInfo>;
-  mcpSource?: McpDataSource;
+  mcpSource?: McpDataSource | ((c: Context<E>) => McpDataSource);
 }
 
 export const isForce = (c: Context) => c.req.query('force') === '1' || c.req.query('refresh') === '1';
@@ -54,7 +54,10 @@ export function createApi<E extends Env = Env>(opts: ApiOptions<E>) {
     if (!c.res.headers.has('Cache-Control')) c.res.headers.set('Cache-Control', 'no-store');
   });
 
-  api.all('/mcp', (c) => handleMcpRequest(c.req.raw, opts.mcpSource ?? defaultMcpDataSource));
+  api.all('/mcp', (c) => {
+    const src = typeof opts.mcpSource === 'function' ? opts.mcpSource(c) : (opts.mcpSource ?? defaultMcpDataSource);
+    return handleMcpRequest(c.req.raw, src);
+  });
 
   api.get('/health', (c) => {
     const cfg = getConfig();
@@ -81,15 +84,41 @@ export function createApi<E extends Env = Env>(opts: ApiOptions<E>) {
   });
 
   api.get('/board/:id', async (c) => {
-    const id = c.req.param('id');
-    const res = await getSingleBoard(id, { force: isForce(c) });
+    const id = c.req.param('id').trim().toLowerCase();
+    const force = isForce(c);
+    if (opts.snapshot) {
+      const { snap } = await opts.snapshot(c, force);
+      if (id === 'total') return c.json({ kind: 'total', contest: snap.contest, total: snap.total, problems: snap.problems });
+      const hit = snap.problems.find((p) => p.meta.slug === id || p.meta.id.toLowerCase() === id);
+      if (!hit) return c.json({ error: 'board not found' }, 404);
+      return c.json({ kind: 'problem', contest: snap.contest, problem: hit });
+    }
+    const res = await getSingleBoard(id, { force });
     if (!res) return c.json({ error: 'board not found' }, 404);
     return c.json(res);
   });
 
   api.get('/export.csv', async (c) => {
     const id = (c.req.query('board') || 'total').trim().toLowerCase();
-    const res = await getSingleBoard(id, { force: isForce(c) });
+    const force = isForce(c);
+    if (opts.snapshot) {
+      const { snap } = await opts.snapshot(c, force);
+      if (id === 'total') {
+        const name = csvFilename('total');
+        return c.body(totalRowsToCsv(snap.total.rows, snap.problems), 200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': contentDisposition(name),
+        });
+      }
+      const hit = snap.problems.find((p) => p.meta.slug === id || p.meta.id.toLowerCase() === id);
+      if (!hit) return c.json({ error: 'board not found' }, 404);
+      const name = csvFilename(hit.meta.slug);
+      return c.body(problemRowsToCsv(hit), 200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': contentDisposition(name),
+      });
+    }
+    const res = await getSingleBoard(id, { force });
     if (!res) return c.json({ error: 'board not found' }, 404);
     const csv = res.kind === 'total' ? totalRowsToCsv(res.total.rows, res.problems) : problemRowsToCsv(res.problem);
     const name = csvFilename(res.kind === 'total' ? 'total' : res.problem.meta.slug);

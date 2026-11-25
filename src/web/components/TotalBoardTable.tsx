@@ -297,7 +297,7 @@ export function TotalBoardTable({
                                       ? 'bg-[var(--surface-muted)] font-semibold text-[var(--ink)]'
                                       : 'text-[var(--ink-2)]',
                                 )}
-                                title={`${pb.meta.title}: ${fmtScore(cell.score)} 分（单题 #${cell.rank}，加权 ${fmtScore(cell.weighted)}）`}
+                                title={`${pb.meta.title}: ${fmtScore(cell.score)} 分（单题 #${cell.rank}，加权 ${fmtScore(cell.score * pb.meta.difficulty)}）`}
                               >
                                 {cell.score.toFixed(1)}
                               </span>

@@ -80,10 +80,10 @@ export function problemRowsToCsv(board: ProblemBoard): string {
         safeText(r.submitter),
         r.score,
         Math.round(r.score * board.meta.difficulty * 100) / 100,
-        r.status,
+        r.status ?? 'Pass',
         r.submittedAt ?? '',
         ...tcCells,
-        r.teamId,
+        r.teamId ?? r.teamKey,
       ]
         .map(esc)
         .join(','),

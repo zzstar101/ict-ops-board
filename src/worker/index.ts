@@ -1,11 +1,19 @@
-// Cloudflare Worker：静态资源（dist/client）+ 同源 API（Hono）+ 推送中枢 / 访问统计（Durable Objects）
+// Cloudflare Worker：静态资源（dist/client）+ 同源 API（Hono）+ 推送中枢 / 全局热缓存 / 访问统计（Durable Objects）
+//
+// 缓存链路（解决 *.workers.dev 上 caches.default 失效以及多 POP 冷启动问题）：
+//   1. POP 边缘 Cache API（ict.nerv-base.com）：30 秒新鲜（HIT），300 秒内 SWR 后台刷新（STALE）
+//   2. 全局 Durable Object（BoardHub）：所有 POP 与 workers.dev 共享一份持久化 gzip 快照 + single-flight 并发合并：
+//      - < 30 秒：直接回热快照（via: hub）
+//      - 30~300 秒：先秒回旧快照（via: hub-stale），同时 waitUntil 触发后台 single-flight 刷新
+//      - > 300 秒或 ?force=1：single-flight 抓取上游并落盘、广播给所有 WS 连接
+//   3. MCP 工具同样优先复用 BoardHub 全局热快照，无需重复冷抓 62 个上游接口。
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type MiddlewareHandler } from 'hono';
 import { createApi, isForce } from '../server/app.ts';
 import { configure, errMsg, getConfig, getSnapshot } from '../server/upstream.ts';
 import type { HitContext } from '../server/visits.ts';
 import { VisitStats, type KV } from '../server/visits.ts';
-import type { HitEvent, OnlineInfo, StatsSummary } from '../shared/types.ts';
+import type { HitEvent, OnlineInfo, Snapshot, StatsSummary } from '../shared/types.ts';
 
 export type Env = Cloudflare.Env & {
   STATS_KEY?: string;
@@ -19,13 +27,20 @@ type HonoEnv = { Bindings: Env };
 
 const TTL_SECONDS = 30;
 const STALE_SECONDS = 300;
-const CACHE_VERSION = '1';
+const CACHE_VERSION = '2';
 const PUSH_INTERVAL_MS = 30_000;
-const HUB_MAX_AGE_MS = PUSH_INTERVAL_MS * 3;
+const HUB_FRESH_MS = 30_000;
+const HUB_STALE_MS = 300_000;
+const HUB_WS_MAX_AGE_MS = PUSH_INTERVAL_MS * 3;
 
 async function gzip(text: string): Promise<ArrayBuffer> {
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
   return new Response(stream).arrayBuffer();
+}
+
+async function gunzipJson<T>(buf: ArrayBuffer): Promise<T> {
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return (await new Response(stream).json()) as T;
 }
 
 const hubOf = (env: Env) => env.BOARD_HUB.get(env.BOARD_HUB.idFromName(`ict:${getConfig().contestSlug}`));
@@ -35,6 +50,8 @@ export class BoardHub extends DurableObject<Env> {
   private gz: ArrayBuffer | null = null;
   private at = 0;
   private lastPush: number | null = null;
+  /** 同一时刻全局只跑一次上游抓取，避免多机房并发打爆上游 */
+  private inflight: Promise<{ gz: ArrayBuffer; at: number }> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -54,14 +71,51 @@ export class BoardHub extends DurableObject<Env> {
     if (request.headers.get('Upgrade') !== 'websocket') return Response.json({ error: 'expected websocket' }, { status: 426 });
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    const fresh = this.gz && Date.now() - this.at < HUB_MAX_AGE_MS;
+    const fresh = this.gz && Date.now() - this.at < HUB_WS_MAX_AGE_MS;
     if (fresh) server.send(this.gz!);
     await this.arm(fresh && Date.now() - this.at < PUSH_INTERVAL_MS ? PUSH_INTERVAL_MS : 300);
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** RPC：读取 DO 里最近一次持久化快照（毫秒级返回，不触发上游抓取） */
   async latest(): Promise<{ gz: ArrayBuffer; at: number } | null> {
     return this.gz ? { gz: this.gz, at: this.at } : null;
+  }
+
+  /** RPC：全局 single-flight 刷新并广播；非强制且仍在新鲜期内直接返回热缓存 */
+  async refresh(force = false): Promise<{ gz: ArrayBuffer; at: number }> {
+    if (!force && this.gz && Date.now() - this.at < HUB_FRESH_MS) {
+      return { gz: this.gz, at: this.at };
+    }
+    if (!this.inflight) {
+      this.inflight = this.doRefresh().finally(() => {
+        this.inflight = null;
+      });
+    }
+    return this.inflight;
+  }
+
+  private async doRefresh(): Promise<{ gz: ArrayBuffer; at: number }> {
+    const sockets = this.ctx.getWebSockets();
+    const snap = await getSnapshot({ force: true });
+    const payload = sockets.length > 0 ? { ...snap, push: { intervalMs: PUSH_INTERVAL_MS, clients: sockets.length } } : snap;
+    const gz = await gzip(JSON.stringify(payload));
+    const at = Date.parse(snap.generatedAt) || Date.now();
+    this.gz = gz;
+    this.at = at;
+    this.lastPush = Date.now();
+    const kv = this.ctx.storage.kv;
+    kv.put('gz', gz);
+    kv.put('at', at);
+    kv.put('lastPush', this.lastPush);
+    for (const ws of sockets) {
+      try {
+        ws.send(gz);
+      } catch {
+        /* ignore */
+      }
+    }
+    return { gz, at };
   }
 
   async online(): Promise<OnlineInfo> {
@@ -77,22 +131,7 @@ export class BoardHub extends DurableObject<Env> {
     const sockets = this.ctx.getWebSockets();
     if (sockets.length === 0) return;
     try {
-      const snap = await getSnapshot({ force: true });
-      const text = JSON.stringify({ ...snap, push: { intervalMs: PUSH_INTERVAL_MS, clients: sockets.length } });
-      this.gz = await gzip(text);
-      this.at = Date.parse(snap.generatedAt);
-      this.lastPush = Date.now();
-      const kv = this.ctx.storage.kv;
-      kv.put('gz', this.gz);
-      kv.put('at', this.at);
-      kv.put('lastPush', this.lastPush);
-      for (const ws of sockets) {
-        try {
-          ws.send(this.gz);
-        } catch {
-          /* ignore */
-        }
-      }
+      await this.refresh(true);
     } catch (err) {
       console.warn('[hub] upstream failed:', errMsg(err));
     }
@@ -128,6 +167,38 @@ export class BoardStats extends DurableObject<Env> {
 
   async summary(days: number, online: number): Promise<StatsSummary> {
     return this.visits.summary(days, online);
+  }
+}
+
+/** 从 BoardHub 全局热缓存获取快照（支持 SWR 后台刷新 + 失败回退旧快照） */
+async function readGlobalSnapshot(
+  env: Env,
+  ctx: { waitUntil(promise: Promise<unknown>): void },
+  force: boolean,
+): Promise<{ snap: Snapshot; via: string }> {
+  const hub = hubOf(env);
+  if (!force) {
+    const cached = await hub.latest().catch(() => null);
+    if (cached) {
+      const ageMs = Date.now() - cached.at;
+      if (ageMs < HUB_FRESH_MS) {
+        return { snap: await gunzipJson<Snapshot>(cached.gz), via: 'hub' };
+      }
+      if (ageMs < HUB_STALE_MS) {
+        ctx.waitUntil(hub.refresh(true).then(() => undefined, () => undefined));
+        return { snap: await gunzipJson<Snapshot>(cached.gz), via: 'hub-stale' };
+      }
+    }
+  }
+  try {
+    const fresh = await hub.refresh(force);
+    return { snap: await gunzipJson<Snapshot>(fresh.gz), via: force ? 'hub-bypass' : 'hub-fresh' };
+  } catch (err) {
+    const fallback = await hub.latest().catch(() => null);
+    if (fallback) {
+      return { snap: await gunzipJson<Snapshot>(fallback.gz), via: 'hub-fallback' };
+    }
+    throw err;
   }
 }
 
@@ -181,7 +252,12 @@ const edgeCache =
 const api = createApi<HonoEnv>({
   runtime: 'cloudflare-worker',
   pushIntervalMs: PUSH_INTERVAL_MS,
+  snapshot: (c, force) => readGlobalSnapshot(c.env, c.executionCtx, force),
   online: (c) => hubOf(c.env).online(),
+  mcpSource: (c) => ({
+    getSnapshot: async () => (await readGlobalSnapshot(c.env, c.executionCtx, false)).snap,
+    now: () => Date.now(),
+  }),
   stats: (c) => {
     if (!c.env.STATS_KEY) return null;
     const stub = statsOf(c.env);

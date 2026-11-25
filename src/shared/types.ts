@@ -11,28 +11,23 @@ export interface VisibleTestcase {
   tbest: number | null;
 }
 
-/** 单条单题榜记录的单个公开用例结果 */
+/** 单条单题榜记录的单个公开用例结果（下标与 meta.visibleTestcases 一一对应，省略冗余 ID） */
 export interface TestcaseMetric {
-  testcaseId: string;
-  status: string;
+  /** 仅在非 Pass 时携带，默认视为 Pass */
+  status?: string;
   /** 实测耗时（μs）；未通过或隐藏时为 null */
   time: number | null;
   /** 相对全场最优 tbest 的倍率（time / tbest，越接近 1.00 越优） */
   ratio: number | null;
-  precisionRatio: number | null;
 }
 
-/** 单支队伍在某一道算子题上的精简成绩（挂载在总榜行上，支撑 10 题矩阵与 Sparkbar） */
+/** 单支队伍在某一道算子题上的精简成绩（挂载在总榜行 problems[slug] 上） */
 export interface TeamProblemCell {
-  problemId: string;
-  slug: string;
   rank: number;
   score: number;
-  /** 难度系数 × score */
-  weighted: number;
-  /** 该题是否当前第 1 名（触发 difficulty × 10 榜首奖励） */
-  isLeader: boolean;
-  updatedAt: string | null;
+  /** 该题是否当前第 1 名（触发 difficulty × 10 榜首奖励）；仅 true 时存在 */
+  isLeader?: boolean;
+  updatedAt?: string | null;
 }
 
 /** 赛事元信息 */
@@ -110,18 +105,18 @@ export interface TotalRow {
 export interface ProblemRow {
   rank: number;
   teamKey: string;
-  teamId: string;
-  teamObjectId: string;
+  teamId?: string;
+  teamObjectId?: string;
   displayId: number | null;
   name: string;
   /** 最近一次有效提交的成员昵称 */
   submitter: string;
-  submitterId: number | null;
+  submitterId?: number | null;
   score: number;
-  status: string;
+  /** 仅在非 Pass 时携带，默认视为 Pass */
+  status?: string;
   submittedAt: string | null;
-  submissionId: string | null;
-  /** 公开用例耗时（长度通常为 5） */
+  /** 公开用例耗时（长度通常为 5，与 meta.visibleTestcases 下标一一对应） */
   testcases: TestcaseMetric[];
 }
 

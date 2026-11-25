@@ -312,31 +312,27 @@ function normalizeProblemRow(item: any, visibleTestcases: VisibleTestcase[]): Pr
   }
   const testcases: TestcaseMetric[] = visibleTestcases.map((vc) => {
     const hit = byId.get(vc.id);
-    const time = num(hit?.time);
-    const ratio = time != null && vc.tbest != null && vc.tbest > 0 ? Math.round((time / vc.tbest) * 1000) / 1000 : null;
-    return {
-      testcaseId: vc.id,
-      status: str(hit?.testcase_status) || 'Unknown',
-      time,
-      ratio,
-      precisionRatio: num(hit?.precision_ratio),
-    };
+    const rawTime = num(hit?.time);
+    const time = rawTime != null ? Math.round(rawTime * 1000) / 1000 : null;
+    const ratio = rawTime != null && vc.tbest != null && vc.tbest > 0 ? Math.round((rawTime / vc.tbest) * 1000) / 1000 : null;
+    const st = str(hit?.testcase_status) || 'Unknown';
+    return st === 'Pass' ? { time, ratio } : { status: st, time, ratio };
   });
-  return {
+  const status = str(item?.status || item?.submission?.status) || 'Pass';
+  const row: ProblemRow = {
     rank: num(item?.rank) ?? 0,
     teamKey: id.teamKey,
-    teamId: id.teamId,
-    teamObjectId: id.teamObjectId,
     displayId: id.displayId,
     name: id.name,
     submitter: str(sub?.nickname || sub?.group_nickname) || (sub?.ID != null ? `#${sub.ID}` : '—'),
-    submitterId: num(sub?.ID),
     score: Math.round((num(item?.score) ?? 0) * 100) / 100,
-    status: str(item?.status || item?.submission?.status) || 'Pass',
     submittedAt: str(item?.create_time || item?.submission?.create_time) || null,
-    submissionId: str(item?.submission_id || item?.submission?._id) || null,
     testcases,
   };
+  if (id.teamId && id.teamId !== id.teamKey) row.teamId = id.teamId;
+  if (id.teamObjectId && id.teamObjectId !== id.teamKey) row.teamObjectId = id.teamObjectId;
+  if (status !== 'Pass') row.status = status;
+  return row;
 }
 
 async function fetchProblemRanking(problemId: string, maxPages = config.maxProblemPages): Promise<ProblemRankingPayload> {
@@ -456,16 +452,13 @@ export function enrichTotalWithProblems(totalRows: TotalRow[], problemBoards: Pr
         byTeam.set(r.teamKey, acc);
       }
       const isLeader = r.rank === 1 && r.score > 0;
-      const weighted = Math.round(r.score * diff * 100) / 100;
-      acc.problems[pb.meta.slug] = {
-        problemId: pb.meta.id,
-        slug: pb.meta.slug,
+      const cell: TeamProblemCell = {
         rank: r.rank,
         score: r.score,
-        weighted,
-        isLeader,
-        updatedAt: r.submittedAt,
       };
+      if (isLeader) cell.isLeader = true;
+      if (r.submittedAt) cell.updatedAt = r.submittedAt;
+      acc.problems[pb.meta.slug] = cell;
       acc.weightedScore += r.score * diff;
       if (isLeader) {
         acc.leaderCount += 1;
